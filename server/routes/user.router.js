@@ -1,52 +1,55 @@
 const express = require('express');
-const {
-  rejectUnauthenticated,
-} = require('../modules/authentication-middleware');
-const encryptLib = require('../modules/encryption');
-const pool = require('../modules/pool');
-const userStrategy = require('../strategies/user.strategy');
-
 const router = express.Router();
+const pool = require('../modules/pool');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const authMiddleware = require('../modules/authMiddleware');
 
-// Handles Ajax request for user information if user is authenticated
-router.get('/', rejectUnauthenticated, (req, res) => {
-  // Send back user object from the session (previously queried from the database)
-  res.send(req.user);
+// Register new user
+router.post('/register', async (req, res) => {
+  const { username, password, email } = req.body;
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const newUser = await pool.query(
+      'INSERT INTO users (username, password, email) VALUES ($1, $2, $3) RETURNING *',
+      [username, hashedPassword, email]
+    );
+    res.json(newUser.rows[0]);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send('Server error');
+  }
 });
 
-// Handles POST request with new user data
-// The only thing different from this and every other post we've seen
-// is that the password gets encrypted before being inserted
-router.post('/register', (req, res, next) => {
-  const username = req.body.username;
-  const password = encryptLib.encryptPassword(req.body.password);
-
-  const queryText = `INSERT INTO "user" (username, password)
-    VALUES ($1, $2) RETURNING id`;
-  pool
-    .query(queryText, [username, password])
-    .then(() => res.sendStatus(201))
-    .catch((err) => {
-      console.log('User registration failed: ', err);
-      res.sendStatus(500);
-    });
+// Login user
+router.post('/login', async (req, res) => {
+  const { username, password } = req.body;
+  try {
+    const user = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+    if (user.rows.length === 0) {
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
+    const isMatch = await bcrypt.compare(password, user.rows[0].password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
+    const token = jwt.sign({ id: user.rows[0].id }, 'your_jwt_secret', { expiresIn: '1h' });
+    res.json({ token });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send('Server error');
+  }
 });
 
-// Handles login form authenticate/login POST
-// userStrategy.authenticate('local') is middleware that we run on this route
-// this middleware will run our POST if successful
-// this middleware will send a 404 if not successful
-router.post('/login', userStrategy.authenticate('local'), (req, res) => {
-  res.sendStatus(200);
-});
-
-// clear all server session information about this user
-router.post('/logout', (req, res, next) => {
-  // Use passport's built-in method to log out the user
-  req.logout((err) => {
-    if (err) { return next(err); }
-    res.sendStatus(200);
-  });
+// Get all users (protected route)
+router.get('/users', authMiddleware, async (req, res) => {
+  try {
+    const allUsers = await pool.query('SELECT * FROM users');
+    res.json(allUsers.rows);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send('Server error');
+  }
 });
 
 module.exports = router;

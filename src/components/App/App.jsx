@@ -4,7 +4,7 @@ function App() {
 
 
   return (
-      <h1>Debate Analyzer</h1>
+      <h1>SocraticLens</h1>
   )
 }   
 
